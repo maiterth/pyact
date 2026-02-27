@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+
+# shellcheck source=../pyact.sh
+# shellcheck disable=SC1091
+. "$script_dir/../pyact.sh"
+
+if [ "${1:-}" == "-h" ] || [ "${1:-}" == "--help" ]; then
+	_pyact_usage
+	echo ""
+	echo "Command mode notes:"
+	echo "  - Activation opens a subshell."
+	echo "  - For same-shell activation, source pyact.sh in your shell rc."
+	exit 0
+fi
+
+pyact "$@"
+ret=$?
+if [ $ret -ne 0 ]; then
+	exit $ret
+fi
+
+if [ "${_PYACT_ACTIVATED:-0}" == "1" ]; then
+	echo "pyact: activated in a subshell. Run 'exit' to return."
+	exec "${SHELL:-/bin/bash}" -i
+fi
+
+exit 0
