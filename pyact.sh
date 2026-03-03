@@ -586,16 +586,24 @@ function pyact() {
     return $?
   fi
 
+  hosttag=$(_pyact_host_tag)
+
   if [ "$(pwd)" == "$(dirname "$HOME")" ] || [ "$(pwd)" == "/" ]; then
-    if [ "$emit_mode" == "1" ]; then
-      echo "pyact: no venv-python${1:-} from here to HOME(exclusive)." >&2
+    if [ "${1:-}" != "" ]; then
+      if [ "$emit_mode" == "1" ]; then
+        echo "pyact: no venv-python${1}-$hosttag from here to HOME(exclusive)." >&2
+      else
+        echo "no venv-python${1}-$hosttag from here to HOME(exclusive)."
+      fi
     else
-      echo "no venv-python$1 from here to HOME(exclusive)."
+      if [ "$emit_mode" == "1" ]; then
+        echo "pyact: no venv-python*-$hosttag from here to HOME(exclusive)." >&2
+      else
+        echo "no venv-python*-$hosttag from here to HOME(exclusive)."
+      fi
     fi
     return 1
   fi
-
-  hosttag=$(_pyact_host_tag)
 
   if [ "$1" == "-c" ]; then
     if [ "$emit_mode" == "1" ]; then
@@ -685,10 +693,16 @@ function pyact() {
 
   request="${1:-}"
 
-  if [ "$emit_mode" != "1" ] && [ "$request" != "" ]; then
-    echo "Trying venv-python$request-$hosttag in $(pwd):"
+  if [ "$request" != "" ]; then
+    if [ "$emit_mode" == "1" ]; then
+      echo "Trying venv-python$request-$hosttag in $(pwd):" >&2
+    else
+      echo "Trying venv-python$request-$hosttag in $(pwd):"
+    fi
   else
-    if [ "$emit_mode" != "1" ]; then
+    if [ "$emit_mode" == "1" ]; then
+      echo "Searching any venv-python in $(pwd) for $hosttag" >&2
+    else
       echo "Searching any venv-python in $(pwd) for $hosttag"
     fi
   fi
