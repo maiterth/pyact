@@ -11,7 +11,10 @@ if [ "${1:-}" == "-h" ] || [ "${1:-}" == "--help" ]; then
 	echo ""
 	echo "Command mode notes:"
 	echo "  - Activation opens a subshell."
-	echo "  - For same-shell activation, source pyact.sh in your shell rc."
+	echo "  - For same-shell activation, eval one of:"
+	echo "      eval \"\$(pyact init bash)\""
+	echo "      eval \"\$(pyact init zsh)\""
+	echo "      pyact init fish | source"
 	exit 0
 fi
 

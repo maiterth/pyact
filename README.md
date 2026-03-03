@@ -45,6 +45,26 @@ Activate the highest available version for this host:
 pyact
 ```
 
+Emit activation code instead of activating immediately (for `eval` / shell wrappers):
+
+```bash
+pyact --emit 3.12
+```
+
+Choose emitted shell syntax explicitly:
+
+```bash
+pyact --emit --shell fish 3.12
+```
+
+Generate shell integration:
+
+```bash
+pyact init bash
+pyact init zsh
+pyact init fish
+```
+
 Deactivate:
 
 ```bash
@@ -79,8 +99,19 @@ For your dotfiles setup, use `$LOCAL/pyact`:
 
 After install, choose one runtime mode:
 
-- Command mode (no sourcing): ensure `<prefix>/bin` is on `PATH`, then use `pyact`.
-- Function mode (same-shell activation): source `pyact.sh` in your shell startup.
+- Command mode (no init): ensure `<prefix>/bin` is on `PATH`, then use `pyact` (activation opens a subshell).
+- Init mode (same-shell activation): evaluate generated shell code in your startup file.
+- Function mode (backwards-compatible): source `pyact.sh` in your shell startup.
+
+Example for init mode:
+
+```bash
+eval "$(pyact init bash)"
+# or
+eval "$(pyact init zsh)"
+# or (fish)
+pyact init fish | source
+```
 
 Example for function mode:
 
@@ -95,9 +126,11 @@ If you prefer standalone commands, add `<prefix>/bin` to `PATH`.
 ## Standalone command mode
 
 `bin/pyact` can be called directly. For activation commands, it opens a subshell with the venv active. Exit that shell to return.
+Use `--emit` to print activation code for your current shell instead.
 
 ```bash
 /path/to/pyact/bin/pyact 3.12
+/path/to/pyact/bin/pyact --emit 3.12
 ```
 
 Use `pyact.sh` for backwards-compatible sourcing:

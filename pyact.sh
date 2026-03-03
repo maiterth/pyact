@@ -5,6 +5,8 @@ if [ -n "${_PYACT_LIB_LOADED:-}" ]; then
 fi
 _PYACT_LIB_LOADED=1
 
+_PYACT_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+
 function _pyact_version_gt() {
   local version_a="$1"
   local version_b="$2"
@@ -327,11 +329,164 @@ function _pyact_cache_command() {
   esac
 }
 
+function _pyact_default_shell() {
+  local shell_name
+
+  shell_name="${SHELL##*/}"
+  case "$shell_name" in
+  bash | zsh | fish)
+    echo "$shell_name"
+    ;;
+  *)
+    echo "bash"
+    ;;
+  esac
+}
+
+function _pyact_is_supported_shell() {
+  case "$1" in
+  bash | zsh | fish)
+    return 0
+    ;;
+  *)
+    return 1
+    ;;
+  esac
+}
+
+function _pyact_emit_activation() {
+  local venvdir="$1"
+  local shell_name="$2"
+  local target
+  local escaped_target
+
+  if [ "$shell_name" == "" ]; then
+    shell_name=$(_pyact_default_shell)
+  fi
+
+  case "$shell_name" in
+  bash | zsh)
+    target="$venvdir/bin/activate"
+    ;;
+  fish)
+    target="$venvdir/bin/activate.fish"
+    ;;
+  *)
+    echo "pyact: unsupported shell for --emit: $shell_name" >&2
+    return 1
+    ;;
+  esac
+
+  if [ ! -f "$target" ]; then
+    echo "pyact: activation script not found: $target" >&2
+    return 1
+  fi
+
+  escaped_target=${target//\\/\\\\}
+  escaped_target=${escaped_target//\"/\\\"}
+  escaped_target=${escaped_target//\$/\\$}
+
+  printf 'source "%s"\n' "$escaped_target"
+}
+
+function _pyact_emit_init_sh() {
+  local shell_name="$1"
+
+  cat <<EOF
+pyact() {
+  local _pyact_first _pyact_snippet
+  _pyact_first="\${1:-}"
+
+  case "\$_pyact_first" in
+    -c|cache|help|-h|--help|init)
+      command pyact "\$@"
+      return \$?
+      ;;
+  esac
+
+  _pyact_snippet="\$(command pyact --emit --shell $shell_name "\$@")" || return \$?
+  if [ "\$_pyact_snippet" != "" ]; then
+    eval "\$_pyact_snippet"
+  fi
+}
+
+pydeact() {
+  if type deactivate >/dev/null 2>&1; then
+    deactivate
+  fi
+  unset PYENV_VERSION
+}
+EOF
+}
+
+function _pyact_emit_init_fish() {
+  cat <<'EOF'
+function pyact --description 'Activate Python venvs with pyact'
+    set -l _pyact_first ''
+    if test (count $argv) -gt 0
+        set _pyact_first $argv[1]
+    end
+
+    switch $_pyact_first
+        case -c cache help -h --help init
+            command pyact $argv
+            return $status
+    end
+
+    set -l _pyact_snippet (command pyact --emit --shell fish $argv)
+    set -l _pyact_status $status
+    if test $_pyact_status -ne 0
+        return $_pyact_status
+    end
+
+    if test -n "$_pyact_snippet"
+        eval $_pyact_snippet
+    end
+end
+
+function pydeact --description 'Deactivate active Python venv'
+    if functions -q deactivate
+        deactivate
+    end
+    set -e PYENV_VERSION
+end
+EOF
+}
+
+function _pyact_init_command() {
+  local shell_name="$1"
+
+  if [ "$shell_name" == "" ] || [ "${2:-}" != "" ]; then
+    echo "Usage: pyact init <bash|zsh|fish>" >&2
+    return 1
+  fi
+
+  case "$shell_name" in
+  bash)
+    _pyact_emit_init_sh "bash"
+    ;;
+  zsh)
+    _pyact_emit_init_sh "zsh"
+    ;;
+  fish)
+    _pyact_emit_init_fish
+    ;;
+  *)
+    echo "Unsupported shell: $shell_name" >&2
+    echo "Usage: pyact init <bash|zsh|fish>" >&2
+    return 1
+    ;;
+  esac
+}
+
 function _pyact_usage() {
   echo "Usage:"
   echo "  pyact -c <python-version>"
   echo "  pyact -c --python <python-bin>"
   echo "  pyact [python-version]"
+  echo "  pyact --emit [python-version]"
+  echo "  pyact --emit --shell <bash|zsh|fish> [python-version]"
+  echo "  pyact init <bash|zsh|fish>"
   echo "  pyact cache [show|clean|purge]"
   echo ""
   echo "Notes:"
@@ -339,6 +494,7 @@ function _pyact_usage() {
   echo "  - uv fallback uses UV_NO_PYTHON_DOWNLOADS=1."
   echo "  - Install missing uv Python with: uv python install <version>."
   echo "  - Custom python create ensures pip in the created venv."
+  echo "  - Use init with eval/source to enable same-shell activation in command mode."
 }
 
 function pyact() {
@@ -352,27 +508,101 @@ function pyact() {
   local targetvenv
   local match
   local venvdir
+  local emit_mode
+  local emit_shell
+  local parse_arg
+  local expecting_shell
+  local venvdir_abs
+  local -a original_args
+  local -a positional_args
+
+  original_args=("$@")
+  positional_args=()
+  emit_mode=0
+  emit_shell=""
+  expecting_shell=0
+
+  for parse_arg in "${original_args[@]}"; do
+    if [ "$expecting_shell" == "1" ]; then
+      emit_shell="$parse_arg"
+      expecting_shell=0
+      continue
+    fi
+
+    case "$parse_arg" in
+    --emit)
+      emit_mode=1
+      ;;
+    --shell)
+      expecting_shell=1
+      ;;
+    --shell=*)
+      emit_shell="${parse_arg#--shell=}"
+      ;;
+    *)
+      positional_args+=("$parse_arg")
+      ;;
+    esac
+  done
+
+  if [ "$expecting_shell" == "1" ]; then
+    echo "pyact: --shell requires a value." >&2
+    return 1
+  fi
+
+  set -- "${positional_args[@]}"
 
   _PYACT_ACTIVATED=0
+
+  if [ "$emit_mode" == "1" ] && [ "$emit_shell" == "" ]; then
+    emit_shell=$(_pyact_default_shell)
+  fi
+
+  if [ "$emit_shell" != "" ] && ! _pyact_is_supported_shell "$emit_shell"; then
+    echo "pyact: unsupported shell: $emit_shell" >&2
+    return 1
+  fi
 
   if [ "${1:-}" == "-h" ] || [ "${1:-}" == "--help" ] || [ "${1:-}" == "help" ]; then
     _pyact_usage
     return 0
   fi
 
+  if [ "$1" == "init" ]; then
+    if [ "$emit_mode" == "1" ]; then
+      echo "pyact: --emit cannot be used with init." >&2
+      return 1
+    fi
+    _pyact_init_command "$2" "${3:-}"
+    return $?
+  fi
+
   if [ "$1" == "cache" ]; then
+    if [ "$emit_mode" == "1" ]; then
+      echo "pyact: --emit cannot be used with cache commands." >&2
+      return 1
+    fi
     _pyact_cache_command "$2"
     return $?
   fi
 
   if [ "$(pwd)" == "$(dirname "$HOME")" ] || [ "$(pwd)" == "/" ]; then
-    echo "no venv-python$1 from here to HOME(exclusive)."
+    if [ "$emit_mode" == "1" ]; then
+      echo "pyact: no venv-python${1:-} from here to HOME(exclusive)." >&2
+    else
+      echo "no venv-python$1 from here to HOME(exclusive)."
+    fi
     return 1
   fi
 
   hosttag=$(_pyact_host_tag)
 
   if [ "$1" == "-c" ]; then
+    if [ "$emit_mode" == "1" ]; then
+      echo "pyact: --emit cannot be used with create commands." >&2
+      return 1
+    fi
+
     if [ "${2:-}" == "--python" ] || [[ "${2:-}" == --python=* ]]; then
       if [ "${2:-}" == "--python" ]; then
         request="$3"
@@ -453,23 +683,38 @@ function pyact() {
     return 0
   fi
 
-  if [ "$1" != "" ]; then
-    echo "Trying venv-python$1-$hosttag in $(pwd):"
+  request="${1:-}"
+
+  if [ "$emit_mode" != "1" ] && [ "$request" != "" ]; then
+    echo "Trying venv-python$request-$hosttag in $(pwd):"
   else
-    echo "Searching any venv-python in $(pwd) for $hosttag"
+    if [ "$emit_mode" != "1" ]; then
+      echo "Searching any venv-python in $(pwd) for $hosttag"
+    fi
   fi
 
-  match=$(_pyact_find_best_venv "$1" "$hosttag")
+  match=$(_pyact_find_best_venv "$request" "$hosttag")
   if [ "$match" != "" ]; then
     venvdir=${match%%$'\t'*}
-    # shellcheck disable=SC1090,SC1091
-    . "$venvdir/bin/activate"
-    _PYACT_ACTIVATED=1
+
+    if [ "$emit_mode" == "1" ]; then
+      venvdir_abs=$(cd "$venvdir" >/dev/null 2>&1 && pwd)
+      if [ "$venvdir_abs" == "" ]; then
+        echo "pyact: failed to resolve venv directory: $venvdir" >&2
+        return 1
+      fi
+      _pyact_emit_activation "$venvdir_abs" "$emit_shell"
+    else
+      # shellcheck disable=SC1090,SC1091
+      . "$venvdir/bin/activate"
+      _PYACT_ACTIVATED=1
+    fi
+
     return 0
   fi
 
   pushd .. >/dev/null || return 1
-  pyact "$@"
+  pyact "${original_args[@]}"
   local ret=$?
   popd >/dev/null || return 1
   return $ret
@@ -488,6 +733,5 @@ function pydeact() {
 }
 
 if [ "${BASH_SOURCE[0]}" == "$0" ]; then
-  _pyact_root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
-  exec "$_pyact_root_dir/bin/pyact" "$@"
+  exec "$_PYACT_ROOT_DIR/bin/pyact" "$@"
 fi
